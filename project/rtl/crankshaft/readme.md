@@ -53,9 +53,9 @@ Saídas:
 
 ---
 
-### ⏳ period_counter
+### ✅ period_counter
 
-**Status:** Não implementado
+**Status:** Implementado
 
 Mede o tempo entre dois dentes consecutivos da roda fônica.
 
@@ -72,9 +72,9 @@ Saídas:
 
 ---
 
-### ⏳ missing_tooth_detector
+### ✅ missing_tooth_detector
 
-**Status:** Não implementado
+**Status:** Implementado
 
 Detecta a ausência de dentes na roda fônica comparando o período entre dentes consecutivos.
 
@@ -92,9 +92,9 @@ Saídas:
 
 ---
 
-### ⏳ rpm_estimator
+### ✅ rpm_estimator
 
-**Status:** Não implementado
+**Status:** Implementado
 
 Calcula a rotação do motor a partir do período entre dentes.
 
@@ -112,9 +112,9 @@ Saídas:
 
 ---
 
-### ⏳ crankshaft_position
+### ✅ crankshaft_position
 
-**Status:** Não implementado
+**Status:** Implementado
 
 Mantém o sincronismo do virabrequim e controla o contador de dentes.
 
@@ -192,3 +192,16 @@ O fluxo de informações deve ocorrer sempre em uma única direção, evitando d
 Cada módulo somente deve conhecer suas entradas e saídas, sem depender da implementação interna dos demais módulos.
 
 Essa arquitetura facilita a manutenção, a expansão futura e a validação individual de cada etapa do processamento do sinal do virabrequim.
+
+
+
+
+## Melhorias Futuras
+
+A implementação atual foi desenvolvida para rodas fônicas do tipo "missing tooth", como 60-2, utilizando a detecção de um intervalo entre dentes significativamente maior que os demais.
+
+Como evolução do projeto, a arquitetura poderá ser generalizada para suportar diferentes padrões de rodas fônicas e estratégias de sincronização, permitindo a configuração do número de dentes, quantidade de dentes ausentes e outros padrões utilizados por diferentes fabricantes. Dessa forma, o mesmo conjunto de módulos poderá ser reutilizado em diversas aplicações apenas por meio da parametrização, sem alterações na lógica principal.
+
+Além disso, a referência angular do sincronismo poderá ser parametrizada. Em aplicações reais, a posição do dente ausente em relação ao Ponto Morto Superior (PMS) varia conforme o projeto mecânico do motor. Dessa forma, a arquitetura futura poderá incluir um deslocamento angular de sincronização (`sync_offset`), permitindo compensar a posição física da falha da roda fônica e obter a posição absoluta real do virabrequim.
+
+Essa abordagem permitirá que o módulo `crankshaft_position` seja utilizado em diferentes motores sem alterações na lógica interna, modificando apenas os parâmetros de configuração da roda fônica e da referência angular.
