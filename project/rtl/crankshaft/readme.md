@@ -17,17 +17,18 @@ period_counter
         │
         ├────────► rpm_estimator
         │
+        └────────► angle_interpolator
+        │
         ▼
 missing_tooth_detector
         │
         ▼
 crankshaft_position
         │
-        ▼
-angle_interpolator
-        │
-        ▼
-scheduler
+        └────────► angle_interpolator
+                  │
+                  ▼
+              scheduler
 ```
 
 ## Módulos
@@ -138,20 +139,25 @@ Saídas:
 
 **Status:** Não implementado
 
-Interpola o ângulo entre dois dentes utilizando o tempo decorrido desde o último pulso.
+Estima continuamente a posição angular do virabrequim entre dois dentes consecutivos da roda fônica.
 
-Esse módulo aumenta significativamente a resolução angular da ECU.
+O módulo utiliza o tempo decorrido desde o último dente e o período medido entre dentes para interpolar o ângulo atual do motor, aumentando significativamente a resolução angular da ECU.
+
+A posição angular discreta é fornecida pelo módulo `crankshaft_position`, enquanto o `angle_interpolator` calcula a posição intermediária entre dois dentes sem modificar a lógica de sincronização ou contagem.
 
 Entradas:
 
 - `clk`
 - `rst`
 - `tooth_period`
-- `tooth_number`
+- `tooth_period_valid`
+- `crankshaft_angle`
+- `position_valid`
 
 Saídas:
 
 - `interpolated_angle`
+- `interpolated_valid`
 
 ---
 
