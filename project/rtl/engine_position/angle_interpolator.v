@@ -1,75 +1,81 @@
 //==============================================================================
-// Módulo: angle_interpolator
+// Modulo: angle_interpolator
 //
-// Descrição:
-// Estima continuamente a posição angular do virabrequim entre dois dentes
-// consecutivos da roda fônica.
+// Descricao:
+// Estima continuamente a posicao angular do virabrequim entre dois dentes
+// consecutivos da roda fonica.
 //
-// O módulo utiliza como referência:
+// A saida utiliza ponto fixo de 16 bits:
 //
-// - a posição angular do último dente detectado;
-// - o período medido entre os dois últimos dentes;
-// - o tempo decorrido desde a última borda de subida do sensor CKP.
+//     360 graus = 65536 unidades
 //
-// Assume-se que a velocidade angular permanece aproximadamente constante
-// durante o intervalo entre dois dentes consecutivos. Dessa forma, a posição
-// angular pode ser estimada por interpolação linear.
+// Para uma roda 60-2, cada posicao possui 6 graus e corresponde a 1092
+// unidades na aproximacao adotada atualmente.
 //
-// Exemplo para uma roda 60-2:
+// Formula:
 //
-//            6°
-// Dente ---------------- Dente
-// 150°                  156°
+// angle = tooth_number * ANGLE_PER_TOOTH
+//       + time_since_tooth * ANGLE_PER_TOOTH / tooth_period
 //
-// Se metade do tempo entre os dois dentes já transcorreu, estima-se que o
-// virabrequim tenha percorrido aproximadamente metade da distância angular,
-// resultando em:
-//
-// 150° + 3° = 153°
-//
-// A saída é fornecida em graus escalados (ANGLE_SCALE), permitindo aumentar a
-// resolução angular sem utilizar números em ponto flutuante.
-//
-// Nesta primeira implementação, a interpolação é realizada por meio de uma
-// divisão inteira. Caso necessário, esse cálculo poderá ser otimizado em
-// versões futuras utilizando técnicas mais adequadas para FPGA, como
-// multiplicação por fatores pré-calculados ou aritmética em ponto fixo.
+// tooth_period deve ser o periodo normal filtrado, e nao o intervalo triplo da
+// falha. Dessa forma, o angulo continua avancando corretamente durante as duas
+// posicoes sem dentes.
 //==============================================================================
 
-
 module angle_interpolator #(
-    parameter ANGLE_BITS = 16,
-    parameter TIME_BITS = 32,
-    parameter ANGLE_PER_TOOTH = 1092
+    parameter integer ANGLE_BITS      = 16,
+    parameter integer TIME_BITS       = 32,
+    parameter integer ANGLE_PER_TOOTH = 1092
 )(
-    input wire clk,
-    input wire rst,
-    input wire [15:0] tooth_number,
-    input wire [TIME_BITS-1:0] tooth_period,
-    input wire [TIME_BITS-1:0] time_since_tooth,
-    input wire position_valid,
-    
-    output reg [ANGLE_BITS-1:0] interpolated_angle,
-    output reg angle_valid
+    input  wire                  clk,
+    input  wire                  rst,
+    input  wire [15:0]           tooth_number,
+    input  wire [TIME_BITS-1:0]  tooth_period,
+    input  wire [TIME_BITS-1:0]  time_since_tooth,
+    input  wire                  position_valid,
+
+    output reg  [ANGLE_BITS-1:0] interpolated_angle,
+    output reg                   angle_valid
 );
+
+    wire [63:0] tooth_number_extended;
+    wire [63:0] time_since_tooth_extended;
+    wire [63:0] base_angle;
+    wire [63:0] offset_numerator;
+    wire [63:0] interpolated_offset;
+    wire [63:0] complete_angle;
+
+    // Estende o numero do dente para 64 bits e evita overflow na multiplicacao.
+    assign tooth_number_extended = {48'd0, tooth_number};
+
+    // Estende o contador de tempo para 64 bits e preserva o valor sem sinal.
+    assign time_since_tooth_extended = {{(64 - TIME_BITS){1'b0}}, time_since_tooth};
+
+    // Calcula o angulo base correspondente ao inicio do dente atual.
+    assign base_angle = tooth_number_extended * ANGLE_PER_TOOTH;
+
+    // Calcula o numerador usado para obter o avanco angular entre os dentes.
+    assign offset_numerator = time_since_tooth_extended * ANGLE_PER_TOOTH;
+
+    // Converte o tempo decorrido em deslocamento angular dentro do dente atual.
+    assign interpolated_offset = (tooth_period != 0) ? (offset_numerator / tooth_period) : 64'd0;
+
+    // Soma o angulo base ao deslocamento interpolado desde o ultimo dente.
+    assign complete_angle = base_angle + interpolated_offset;
 
     always @(posedge clk) begin
         if (rst) begin
             interpolated_angle <= 0;
-            angle_valid <= 0;
+            angle_valid        <= 1'b0;
         end
         else begin
-            angle_valid <= 0;
+            angle_valid <= 1'b0;
 
-            if (position_valid) begin
-                if (tooth_period != 0) begin
-                    interpolated_angle <= (tooth_number * ANGLE_PER_TOOTH) + ((time_since_tooth * ANGLE_PER_TOOTH) / tooth_period);
-                end
-                else begin
-                    interpolated_angle <= 0;
-                end
-
-                angle_valid <= 1;
+            if (position_valid && (tooth_period != 0)) begin
+                // Os bits menos significativos implementam naturalmente o
+                // retorno de 360 graus para zero.
+                interpolated_angle <= complete_angle[ANGLE_BITS-1:0];
+                angle_valid        <= 1'b1;
             end
         end
     end

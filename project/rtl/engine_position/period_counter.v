@@ -1,75 +1,78 @@
 //==============================================================================
-// Módulo: period_counter
+// Modulo: period_counter
 //
-// Objetivo:
+// Descricao:
+// Mede, em ciclos de clock, o intervalo entre duas bordas de subida
+// consecutivas do sensor CKP.
 //
-// O objetivo deste módulo é medir o intervalo de tempo entre dois dentes
-// consecutivos da roda fônica.
+// Alem do ultimo periodo concluido, o modulo expoe continuamente o tempo
+// decorrido desde o ultimo dente. Essa segunda informacao e utilizada pelo
+// angle_interpolator para estimar a posicao angular entre dentes.
 //
-// O módulo recebe como entrada o pulso `tooth_rise`, gerado pelo
-// `edge_detector`, que representa a passagem de um dente pelo sensor CKP
-// (Crankshaft Position Sensor - Sensor de posição do virabrequim).
+// A primeira borda apos o reset apenas estabelece a referencia temporal. Uma
+// medicao valida somente e publicada a partir da segunda borda.
 //
-// Internamente, um contador é incrementado a cada ciclo de clock da FPGA.
-// Quando um novo pulso `tooth_rise` é detectado, o valor acumulado pelo
-// contador representa exatamente quantos ciclos de clock transcorreram desde a
-// passagem do dente anterior.
+// Medicao do periodo:
 //
-// Esse valor é disponibilizado na saída `tooth_period`, enquanto a saída
-// `period_valid` gera um pulso de um único ciclo de clock indicando aos módulos
-// seguintes que uma nova medição foi concluída e está pronta para ser utilizada.
+// tooth_period = time_since_tooth + 1
 //
-// Este módulo não interpreta o valor medido. Ele não calcula a rotação do
-// motor, não detecta dentes faltantes, não determina a posição angular do
-// virabrequim e não toma qualquer decisão sobre o funcionamento da ECU.
-//
-// Sua única responsabilidade é atuar como um cronômetro de alta resolução,
-// convertendo a sequência de pulsos gerada pelo sensor em uma medida precisa do
-// tempo entre dentes consecutivos.
-//
-// Essa informação é utilizada por diversos módulos da ECU, como:
-//
-//   - rpm_estimator
-//       Calcula a rotação do motor a partir do período entre dentes.
-//
-//   - missing_tooth_detector
-//       Detecta a região dos dentes ausentes comparando o período entre dentes
-//       consecutivos.
-//
-//   - angle_interpolator
-//       Estima o ângulo do virabrequim entre dois dentes utilizando o período
-//       medido como referência.
-//
-// Ao concentrar toda a medição de tempo em um único módulo, evita-se que cada
-// componente da ECU implemente seu próprio contador, reduzindo duplicação de
-// lógica, simplificando a arquitetura e garantindo que todos os cálculos do
-// sistema utilizem exatamente a mesma referência temporal.
+// A soma de um inclui o ciclo da borda atual no intervalo medido entre as
+// duas bordas consecutivas.
 //==============================================================================
 
 module period_counter (
-    input wire clk,
-    input wire rst,
-    input wire tooth_rise,
-    output reg [31:0] tooth_period,
-    output reg        period_valid
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        tooth_rise,
+
+    output reg  [31:0] tooth_period,
+    output reg         period_valid,
+    output reg  [31:0] time_since_tooth
 );
 
-    reg [31:0] counter;
+    // Indica que uma primeira borda ja foi recebida e existe uma referencia.
+    reg has_previous_tooth;
 
     always @(posedge clk) begin
         if (rst) begin
-            counter <= 32'd0;
-            tooth_period <= 32'd0;
+            tooth_period       <= 32'd0;
+            period_valid       <= 1'b0;
+            time_since_tooth   <= 32'd0;
+            has_previous_tooth <= 1'b0;
+        end
+        else begin
+            // period_valid permanece ativo por somente um ciclo de clock.
             period_valid <= 1'b0;
-        end else begin
+
             if (tooth_rise) begin
-                tooth_period <= counter - 1'b1; // Subtrai 1 para compensar o ciclo de clock do pulso tooth_rise
-                period_valid <= 1'b1;
-                counter <= 32'd0;
-            end else begin
-                period_valid <= 1'b0;
-                counter <= counter + 1'b1;
+                if (has_previous_tooth) begin
+                    // Soma um ao contador para incluir o ciclo da nova borda.
+                    if (time_since_tooth == 32'hFFFFFFFF) begin
+                        // Mantem o periodo no valor maximo quando o contador saturou.
+                        tooth_period <= 32'hFFFFFFFF;
+                    end
+                    else begin
+                        tooth_period <= time_since_tooth + 32'd1;
+                    end
+
+                    // Indica que um novo periodo completo foi publicado.
+                    period_valid <= 1'b1;
+                end
+                else begin
+                    // A primeira borda apenas inicia a referencia temporal.
+                    has_previous_tooth <= 1'b1;
+                end
+
+                // Reinicia a medicao do tempo para o proximo dente.
+                time_since_tooth <= 32'd0;
+            end
+            else if (has_previous_tooth) begin
+                // Incrementa o tempo decorrido enquanto aguarda o proximo dente.
+                if (time_since_tooth != 32'hFFFFFFFF) begin
+                    time_since_tooth <= time_since_tooth + 32'd1;
+                end
             end
         end
     end
+
 endmodule

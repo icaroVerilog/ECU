@@ -1,134 +1,72 @@
-// module crankshaft_position #(
-//     parameter TOTAL_TEETH = 60,
-//     parameter PHYSICAL_TEETH = 58
-// )(
-//     input wire clk,
-//     input wire rst,
-//     input wire tooth_rise,
-//     input wire sync,
-
-//     output reg [$clog2(PHYSICAL_TEETH)-1:0] tooth_number,
-//     output reg [8:0] crankshaft_angle,
-//     output reg position_valid
-// );
-
-//     reg sync_active;
-
-//     always @(posedge clk) begin
-//         if (rst) begin
-//             tooth_number <= 0;
-//             crankshaft_angle <= 0;
-//             position_valid <= 0;
-//             sync_active <= 0;
-
-//         end else begin
-//             /*
-//              * Quando o sincronismo é encontrado, a ECU passa a conhecer a referência angular da roda fônica.
-//              * O sincronismo não deve zerar o contador de dentes, pois a contagem representa a posição atual do
-//              * virabrequim após a referência ser encontrada.
-//              */
-//             if (sync) begin
-//                 sync_active <= 1;
-//             end
-//             /*
-//              * Antes do sincronismo ser encontrado, a ECU não sabe a posição absoluta do virabrequim.
-//              */
-//             if (!sync_active) begin
-//                 position_valid <= 0;
-//             end 
-//             else begin
-//                 position_valid <= 1;
-//                 if (tooth_rise) begin
-//                     if (tooth_number < PHYSICAL_TEETH-1) begin
-//                         tooth_number <= tooth_number + 1;
-//                     end
-//                     else begin
-//                         tooth_number <= 0;
-//                     end
-
-
-//                     /*
-//                      * Converte o número do dente em posição angular. Uma roda 60-2 possui:
-//                      * 360 graus / 60 posições = 6 graus
-//                      * Mesmo existindo somente 58 dentes físicos,
-//                      * a referência angular continua sendo baseada
-//                      * nas 60 posições da roda.
-//                      */
-//                     if (tooth_number < PHYSICAL_TEETH-1) begin
-//                         crankshaft_angle <= (tooth_number + 1) * (360 / TOTAL_TEETH);
-//                     end
-//                     else begin
-//                         crankshaft_angle <= 0;
-//                     end
-//                 end
-//             end
-//         end
-//     end
-// endmodule
-
-
-
 //==============================================================================
-// Módulo: crankshaft_position
+// Modulo: crankshaft_position
 //
-// Descrição:
-// Mantém o sincronismo da roda fônica após a detecção do dente ausente.
+// Descricao:
+// Mantem a posicao discreta da roda fonica depois que a falha dos dentes e
+// identificada.
 //
-// Sua única responsabilidade é informar qual dente físico está passando pelo
-// sensor CKP.
+// missing_tooth representa a borda do primeiro dente fisico depois da falha.
+// Nesse evento, tooth_number e realinhado para zero. Nos demais dentes, a
+// contagem avanca de zero ate PHYSICAL_TEETH - 1.
 //
-// A conversão da posição do dente em ângulo absoluto é realizada pelo módulo
+// A conversao da posicao discreta para angulo continuo pertence ao modulo
 // angle_interpolator.
 //==============================================================================
 
 module crankshaft_position #(
-    parameter TOTAL_TEETH = 60,
-    parameter PHYSICAL_TEETH = 58
+    parameter integer TOTAL_TEETH    = 60,
+    parameter integer PHYSICAL_TEETH = 58
 )(
-    input wire clk,
-    input wire rst,
-    input wire tooth_rise,
-    input wire sync,
+    input  wire clk,
+    input  wire rst,
+    input  wire tooth_rise,
+    input  wire sync,
+    input  wire missing_tooth,
 
     output reg [$clog2(PHYSICAL_TEETH)-1:0] tooth_number,
-    output reg position_valid
+    output reg                              position_valid
 );
 
+    // Indica que a referencia da roda ja foi encontrada e a posicao e valida.
     reg sync_active;
 
     always @(posedge clk) begin
         if (rst) begin
-            tooth_number <= 0;
-            position_valid <= 0;
-            sync_active <= 0;
-        end else begin
-            /*
-             * Quando o sincronismo é encontrado, a ECU passa a conhecer
-             * a posição absoluta da roda fônica.
-             */
+            tooth_number   <= 0;
+            position_valid <= 1'b0;
+            sync_active    <= 1'b0;
+        end
+        else begin
+            // Mantem o sincronismo ativo depois que a falha e detectada.
             if (sync) begin
-                sync_active <= 1;
+                sync_active <= 1'b1;
             end
-            /*
-             * Antes do sincronismo, a posição do dente não é válida.
-             */
-            if (!sync_active) begin
-                position_valid <= 0;
+
+            // O primeiro dente depois da falha define o inicio da nova volta.
+            if (missing_tooth) begin
+                tooth_number   <= 0;
+                position_valid <= 1'b1;
+                sync_active    <= 1'b1;
             end
-            else begin
-                position_valid <= 1;
-                /*
-                 * Cada borda de subida representa a passagem de um
-                 * novo dente físico.
-                 */
+            else if (sync_active) begin
+                // A posicao permanece valida enquanto o sistema esta sincronizado.
+                position_valid <= 1'b1;
+
                 if (tooth_rise) begin
-                    if (tooth_number < PHYSICAL_TEETH-1) begin
-                        tooth_number <= tooth_number + 1;
+                    // Avanca para o proximo dente fisico enquanto nao atingir o limite.
+                    if (tooth_number < PHYSICAL_TEETH - 1) begin
+                        tooth_number <= tooth_number + 1'b1;
                     end
                     else begin
+                        // Evita ultrapassar a quantidade de dentes fisicos da roda.
                         tooth_number <= 0;
                     end
                 end
+            end
+            else begin
+                // Sem sincronismo, nenhuma posicao deve ser considerada valida.
+                tooth_number   <= 0;
+                position_valid <= 1'b0;
             end
         end
     end

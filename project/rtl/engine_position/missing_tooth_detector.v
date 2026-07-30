@@ -1,22 +1,30 @@
 //==============================================================================
-// Módulo: missing_tooth_detector
+// Modulo: missing_tooth_detector
 //
-// Descrição:
-// Detecta a região dos dentes faltantes da roda fônica.
+// Descricao:
+// Detecta a regiao dos dentes ausentes de uma roda fonica do tipo missing
+// tooth, como a 60-2.
 //
-// O módulo possui dois estados:
+// Durante a aquisicao, o periodo atual e comparado com o periodo anterior.
+// Depois do sincronismo, a referencia passa a ser a media dos quatro ultimos
+// periodos normais.
 //
-// ACQUISITION:
-// Ainda não possui sincronismo com a roda fônica. O primeiro gap é detectado
-// comparando o período atual com o período anterior.
+// O modulo tambem publica normal_tooth_period. Essa saida representa o periodo
+// esperado entre duas posicoes angulares consecutivas da roda e nao e
+// contaminada pelo intervalo maior da falha. Ela deve ser usada pelo calculo
+// de RPM e pela interpolacao angular.
 //
-// SYNCHRONIZED:
-// Após encontrar o primeiro gap, utiliza a média dos últimos quatro dentes
-// normais como referência. Períodos correspondentes aos dentes faltantes não
-// são adicionados à média.
+// Condicao de deteccao:
 //
-// O filtro de rearmamento impede que variações momentâneas sejam interpretadas
-// como múltiplos dentes faltantes consecutivos.
+// tooth_period > reference_period * THRESHOLD_NUMERATOR
+//                ---------------------------------------
+//                       THRESHOLD_DENOMINATOR
+//
+// Para evitar divisao e truncamento, a comparacao e reorganizada:
+//
+// tooth_period * THRESHOLD_DENOMINATOR
+//     >
+// reference_period * THRESHOLD_NUMERATOR
 //==============================================================================
 
 module missing_tooth_detector #(
@@ -28,15 +36,17 @@ module missing_tooth_detector #(
     input  wire        rst,
     input  wire [31:0] tooth_period,
     input  wire        period_valid,
+
     output reg         missing_tooth,
-    output reg         sync
+    output reg         sync,
+    output reg  [31:0] normal_tooth_period,
+    output reg         normal_period_valid
 );
 
     localparam ACQUISITION  = 1'b0;
     localparam SYNCHRONIZED = 1'b1;
 
     reg state;
-
     reg [31:0] previous_period;
 
     reg [31:0] tooth_period_sample0;
@@ -47,79 +57,114 @@ module missing_tooth_detector #(
     reg [31:0] normal_teeth_count;
 
     wire [33:0] sum_periods;
-
-    assign sum_periods = tooth_period_sample0 + tooth_period_sample1 + tooth_period_sample2 + tooth_period_sample3;
-
     wire [31:0] mean_period;
+    wire [63:0] acquisition_current_scaled;
+    wire [63:0] acquisition_previous_scaled;
+    wire [63:0] synchronized_current_scaled;
+    wire [63:0] synchronized_reference_scaled;
+    wire [33:0] next_normal_sum;
 
+    // Soma os quatro ultimos periodos normais sem perder bits no resultado.
+    assign sum_periods = {2'b00, tooth_period_sample0} + {2'b00, tooth_period_sample1} + {2'b00, tooth_period_sample2} + {2'b00, tooth_period_sample3};
+
+    // Divide a soma por quatro para obter a media dos periodos normais.
     assign mean_period = sum_periods >> 2;
 
-    wire [63:0] threshold_value;
+    // Multiplica o periodo atual pelo denominador do limite de deteccao.
+    assign acquisition_current_scaled = {32'd0, tooth_period} * THRESHOLD_DENOMINATOR;
 
-    assign threshold_value = (mean_period * THRESHOLD_NUMERATOR) / THRESHOLD_DENOMINATOR;
+    // Multiplica o periodo anterior pelo numerador do limite de deteccao.
+    assign acquisition_previous_scaled = {32'd0, previous_period} * THRESHOLD_NUMERATOR;
+
+    // Multiplica o periodo atual pelo denominador durante o sincronismo.
+    assign synchronized_current_scaled = {32'd0, tooth_period} * THRESHOLD_DENOMINATOR;
+
+    // Multiplica a media normal pelo numerador durante o sincronismo.
+    assign synchronized_reference_scaled = {32'd0, mean_period} * THRESHOLD_NUMERATOR;
+
+    // Soma o periodo atual aos tres periodos normais mais recentes.
+    assign next_normal_sum = {2'b00, tooth_period} + {2'b00, tooth_period_sample0} + {2'b00, tooth_period_sample1} + {2'b00, tooth_period_sample2};
 
     always @(posedge clk) begin
         if (rst) begin
-            state <= ACQUISITION;
-            previous_period <= 32'd0;
-
+            state                <= ACQUISITION;
+            previous_period      <= 32'd0;
             tooth_period_sample0 <= 32'd0;
             tooth_period_sample1 <= 32'd0;
             tooth_period_sample2 <= 32'd0;
             tooth_period_sample3 <= 32'd0;
-
-            normal_teeth_count <= 32'd0;
-
-            missing_tooth <= 1'b0;
-            sync <= 1'b0;
+            normal_teeth_count   <= 32'd0;
+            missing_tooth        <= 1'b0;
+            sync                 <= 1'b0;
+            normal_tooth_period  <= 32'd0;
+            normal_period_valid  <= 1'b0;
         end
         else begin
-            missing_tooth <= 1'b0;
+            // As saidas de evento permanecem ativas por apenas um ciclo.
+            missing_tooth       <= 1'b0;
+            normal_period_valid <= 1'b0;
 
-            if (period_valid) begin
+            if (period_valid && (tooth_period != 32'd0)) begin
                 case (state)
                     ACQUISITION: begin
-                        if (previous_period != 32'd0) begin
-                            if (tooth_period > ((previous_period * THRESHOLD_NUMERATOR) / THRESHOLD_DENOMINATOR)) begin
+                        // Compara o periodo atual com o anterior sem realizar divisao.
+                        if ((previous_period != 32'd0) && (acquisition_current_scaled > acquisition_previous_scaled)) begin
+                            missing_tooth <= 1'b1;
+                            sync          <= 1'b1;
+                            state         <= SYNCHRONIZED;
 
-                                missing_tooth <= 1'b1;
-                                sync <= 1'b1;
+                            // O periodo anterior ao gap inicializa a janela
+                            // com uma referencia conhecida como normal.
+                            tooth_period_sample0 <= previous_period;
+                            tooth_period_sample1 <= previous_period;
+                            tooth_period_sample2 <= previous_period;
+                            tooth_period_sample3 <= previous_period;
 
-                                state <= SYNCHRONIZED;
-
-                                tooth_period_sample0 <= previous_period;
-                                tooth_period_sample1 <= previous_period;
-                                tooth_period_sample2 <= previous_period;
-                                tooth_period_sample3 <= previous_period;
-
-                                normal_teeth_count <= 32'd0;
-                            end
-                            else begin
-                                previous_period <= tooth_period;
-                            end
+                            normal_tooth_period <= previous_period;
+                            normal_period_valid <= 1'b1;
+                            normal_teeth_count  <= 32'd0;
                         end
                         else begin
-                            previous_period <= tooth_period;
+                            // Enquanto nao houver gap, o periodo atual se
+                            // torna a referencia da proxima comparacao.
+                            previous_period     <= tooth_period;
+                            normal_tooth_period <= tooth_period;
+                            normal_period_valid <= 1'b1;
                         end
                     end
 
                     SYNCHRONIZED: begin
-                        if (tooth_period > threshold_value[31:0]) begin
+                        // Detecta um periodo maior que o limite calculado
+                        // sobre a media dos quatro ultimos periodos normais.
+                        if (synchronized_current_scaled > synchronized_reference_scaled) begin
+                            // Exige dentes normais antes de permitir uma
+                            // nova deteccao da falha.
                             if (normal_teeth_count >= REARM_TEETH) begin
-                                missing_tooth <= 1'b1;
+                                missing_tooth      <= 1'b1;
                                 normal_teeth_count <= 32'd0;
                             end
                         end
                         else begin
+                            // Rearma gradualmente o detector depois do gap.
                             if (normal_teeth_count < REARM_TEETH) begin
-                                normal_teeth_count <= normal_teeth_count + 1'b1;
+                                normal_teeth_count <= normal_teeth_count + 32'd1;
                             end
 
+                            // Desloca a janela e adiciona o periodo normal atual.
                             tooth_period_sample3 <= tooth_period_sample2;
                             tooth_period_sample2 <= tooth_period_sample1;
                             tooth_period_sample1 <= tooth_period_sample0;
                             tooth_period_sample0 <= tooth_period;
+
+                            // Divide por quatro a soma da nova janela de periodos.
+                            normal_tooth_period <= next_normal_sum >> 2;
+                            normal_period_valid <= 1'b1;
+                            previous_period     <= tooth_period;
                         end
+                    end
+
+                    default: begin
+                        state <= ACQUISITION;
                     end
                 endcase
             end
